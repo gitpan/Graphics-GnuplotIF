@@ -1,0 +1,12 @@
+Revision history for Perl extension GnuplotIF.
+
+1.0  Thu Jul 28 11:00:14 2005
+	- original version; created by h2xs 1.23 with options
+		-XA -n GnuplotIF
+
+1.1  Aug 27 2006
+  - method gnuplot_set_plot_titles added (thanks to Stephen Marshall)
+
+1.2  Jun 06 2007
+  - tests improved
+
