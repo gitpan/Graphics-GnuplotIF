@@ -12,7 +12,7 @@
 #      COMPANY:  FH Suedwestfalen, Iserlohn
 #      VERSION:  see $VERSION below
 #      CREATED:  16.07.2005 13:43:11 CEST
-#     REVISION:  $Id: GnuplotIF.pm,v 1.1.1.1 2007/06/07 07:14:27 mehner Exp $
+#     REVISION:  $Id: GnuplotIF.pm,v 1.3 2007/10/13 15:15:34 mehner Exp $
 #===============================================================================
 
 package Graphics::GnuplotIF;
@@ -21,7 +21,7 @@ use strict;
 use warnings;
 use IO::Handle;
 
-use version; our $VERSION     = qv('1.2.0');    # version number
+our $VERSION     = '1.3.0';                     # version number
 
 use base qw(Exporter);
 
@@ -44,6 +44,13 @@ my  %linestyles =                               # allowed line styles
 );
 
 my  $object_number   = 0;                       # number of created objects
+
+#---------------------------------------------------------------------------
+#  warn if there is no graphic display
+#---------------------------------------------------------------------------
+if ( ! $ENV{'DISPLAY'} ) {
+	warn "Graphics::GnuplotIF : cannot find environment variable DISPLAY \n"
+}
 
 #
 #  Code common to gnuplot_plot_xy and gnuplot_plot_y to allow user-
@@ -85,10 +92,6 @@ my $private_apply_plot_titles = sub {
 #      RETURNS:  object reference
 #===============================================================================
 sub new {
-
-    if ( ! $ENV{'DISPLAY'} ) {
-        die "Graphics::GnuplotIF : cannot find environment variable DISPLAY \n"
-    }
 
     my  $PIPE;
     open $PIPE, '|- ', 'gnuplot'
@@ -200,6 +203,60 @@ sub gnuplot_plot_xy {
     }
     return;
 } # ----------  end of subroutine gnuplot_plot_xy  ----------
+  
+#===  CLASS METHOD  ============================================================
+#         NAME:  gnuplot_plot_xy_style
+#      PURPOSE:  x-y-plot(s) with each graph using individual settings
+#   PARAMETERS:  1. array reference : x-values
+#                2. hash reference : (y-values, y-style)
+#                 ...
+#      RETURNS:  ---
+#  DESCRIPTION:  Takes one array reference and one or more hash references.
+#                The first array is assumed to contain the x-values for the
+#                following function values. The following hashes are assumed
+#                to contain pairs of values and settings.
+#===============================================================================
+sub gnuplot_plot_xy_style {
+    my  $parnr  = 1;
+    my  ( $self, $xref, @yref )   = @_;
+    my  ( $cmd, @cmd );
+
+    foreach my $j ( 0..$#yref ) {
+        die "Graphics::GnuplotIF ($self->{__objectnr}): gnuplot_plot_xy_style - "
+        .($parnr + $j + 1).". argument not a suitable hash reference\n"
+        if ! (ref($yref[$j]) eq 'HASH'
+		&& exists $yref[$j]->{'style_spec'} && exists $yref[$j]->{'y_values'});
+
+        push @cmd, " '-' using 1:2 with $yref[$j]->{'style_spec'} title <PLOT_TITLE>";    
+    }
+    $cmd = join(", \\\n", @cmd);
+    $self->$private_apply_plot_titles(\$cmd); # Honor gnuplot_set_plot_titles
+    return if $cmd eq q{};
+
+    print { $self->{__pipehandle}} "plot $cmd\n";
+
+    die "Graphics::GnuplotIF ($self->{__objectnr}): gnuplot_plot_xy_style : $parnr. "
+    ."argument not an array reference\n"
+    if ref($xref) ne 'ARRAY';
+
+    foreach my $j ( 0..$#yref ) {
+        $parnr++;
+        die "Graphics::GnuplotIF ($self->{__objectnr}): gnuplot_plot_xy_style - "
+        ."$parnr. argument is missing an array reference\n"
+        if ref($yref[$j]->{'y_values'}) ne 'ARRAY';
+
+        # there may be lesser y-values than x-values
+
+        my  $min    = $#{$xref} < $#{$yref[$j]->{'y_values'}}
+                    ? $#{$xref}
+                    : $#{$yref[$j]->{'y_values'}};
+        foreach my $i ( 0..$min ) {
+            print { $self->{__pipehandle}} "$$xref[$i] $yref[$j]->{'y_values'}->[$i]\n";
+        }
+        print { $self->{__pipehandle}} "e\n";
+    }
+    return;
+} # ----------  end of subroutine gnuplot_plot_xy_style  ----------
 
 #===  CLASS METHOD  ============================================================
 #         NAME:  gnuplot_plot_equation
@@ -390,7 +447,7 @@ END { }                                         # module clean-up code
 1;
 
 
-__END__
+#__END__
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 #  Module Documentation
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -401,7 +458,7 @@ Graphics::GnuplotIF - A dynamic Perl interface to gnuplot
 
 =head1 VERSION
 
-This documentation refers to Graphics::GnuplotIF version 1.2
+This documentation refers to Graphics::GnuplotIF version 1.3
 
 =head1 SYNOPSIS
 
@@ -515,6 +572,18 @@ the x-values 0, 1, 2, 3, ...
 C<gnuplot_plot_xy> takes two or more array references.  The first array is
 assumed to contain the x-values for the following function values.
 
+=head2 gnuplot_plot_xy_style
+
+  %y1 = ( 'y_values' => \@y1, 'style_spec' => "lines lw 3" );
+  %y2 = ( 'y_values' => \@y2, 'style_spec' => "points pointtype 4 pointsize 5" );
+
+  $plot1->gnuplot_plot_xy_style( \@x, \%y1, \%y2 );
+
+C<gnuplot_plot_xy_style> takes one array reference and one or more hash references.
+The first array is assumed to contain the x-values for the following function
+values. The following hashes are assumed to contain pairs of y-values and individual
+style specifications for use in the plot command. The 'style_spec' settings are
+placed between C<with> and C<title> of B<gnuplot>'s C<plot> command.
 
 =head2 gnuplot_plot_equation
 
@@ -574,8 +643,8 @@ those not wrapped by a Graphics::GnuplotIF method.
 C<gnuplot_cmd> can be used to write a plot into a file or make a hardcopy by
 setting/resetting the terminal and the output file:
 
-  $plot1->gnuplot_cmd( 'set terminal png color',
-                       'set output   "plot1.png" ' );
+  $plot1->gnuplot_cmd( 'set terminal png',
+                       'set output   "test-plot-1.png" ' );
 
   $plot1->gnuplot_plot_xy( \@x, \@y1, \@y2 );
 
@@ -713,6 +782,7 @@ Dr.-Ing. Fritz Mehner (mehner@fh-swf.de)
 
 Stephen Marshall (smarshall@wsi.com) contributed C<gnuplot_set_plot_titles>.
 
+Georg Bauhaus (bauhaus@futureapps.de) contributed C<gnuplot_plot_xy_style>.
 
 =head1 LICENSE AND COPYRIGHT
 

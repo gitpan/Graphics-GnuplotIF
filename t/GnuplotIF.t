@@ -15,7 +15,7 @@
 #      COMPANY:  Fachhochschule Südwestfalen, Iserlohn
 #      VERSION:  1.2
 #      CREATED:  27.08.2006 13:39:57 CEST
-#     REVISION:  $Id: GnuplotIF.t,v 1.1.1.1 2007/06/07 07:14:27 mehner Exp $
+#     REVISION:  $Id: GnuplotIF.t,v 1.2 2007/10/13 15:16:10 mehner Exp $
 #===============================================================================
 
 use strict;
@@ -34,6 +34,9 @@ ok ( test1() , "run Graphics::GnuplotIF demo" );
 #  test function 1
 #---------------------------------------------------------------------------
 sub test1 {
+
+    if ( ! $ENV{'DISPLAY'} ) { return 1; }      # no display; skip this test
+
     my  @x   = ( -2, -1.50,  -1,  -0.50,  0,  0.50,  1, 1.50, 2 ); # x values
     my  @y1  = (  4,  2.25,   1,   0.25,  0,  0.25,  1, 2.25, 4 ); # function 1
     my  @y2  = (  2,  0.25,  -1,  -1.75, -2, -1.75, -1, 0.25, 2 ); # function 2
@@ -55,6 +58,14 @@ sub test1 {
     #  Plot same data again, this time with all default settings.
     $plot1->gnuplot_reset();
     $plot1->gnuplot_plot_xy( \@x, \@y1, \@y2 ); # rewrite plot1 : y1, y2 over x
+    $plot1->gnuplot_pause( $wait );
+
+    #  Plot same data again, again starting from default settings,
+    #  but with individual plotting styles applied per function
+    my %y1 = ( 'y_values' => \@y1, 'style_spec' => "lines lw 3" );
+    my %y2 = ( 'y_values' => \@y2, 'style_spec' => "points pointtype 4 pointsize 5" );
+    $plot1->gnuplot_reset();
+    $plot1->gnuplot_plot_xy_style( \@x, \%y1, \%y2 );
     $plot1->gnuplot_pause( $wait );
 
     my  $plot2  = Graphics::GnuplotIF->new;

@@ -12,15 +12,15 @@
 #      COMPANY:  Fachhochschule Südwestfalen, Iserlohn
 #      VERSION:  1.0
 #      CREATED:  06.06.2007 19:51:15 CEST
-#     REVISION:  $Id: pod.t,v 1.1.1.1 2007/06/07 07:14:27 mehner Exp $
+#     REVISION:  $Id: pod.t,v 1.2 2007/10/13 15:55:50 mehner Exp $
 #===============================================================================
 
 use strict;
 use warnings;
 
 use Test::More;
-eval "use Test::Pod 1.14";
-plan skip_all => "Test::Pod 1.14 required for testing POD" if $@;
+eval "use Test::Pod 1.0";
+plan skip_all => "Test::Pod 1.0 required for testing POD" if $@;
 
 my $login;
 eval { $login = $ENV{USER} };
