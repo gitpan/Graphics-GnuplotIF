@@ -12,54 +12,32 @@
 #      COMPANY:  FH Suedwestfalen, Iserlohn
 #      VERSION:  see $VERSION below
 #      CREATED:  16.07.2005 13:43:11 CEST
-#     REVISION:  $Id: GnuplotIF.pm,v 1.3 2007/10/13 15:15:34 mehner Exp $
+#     REVISION:  $Id: GnuplotIF.pm,v 1.9 2007/12/12 16:02:18 mehner Exp $
 #===============================================================================
 
 package Graphics::GnuplotIF;
 
 use strict;
 use warnings;
+use Carp;
 use IO::Handle;
 
-our $VERSION     = '1.3.0';                     # version number
+our $VERSION     = '1.4';                       # version number
 
 use base qw(Exporter);
+use vars qw(@ISA @EXPORT_OK %EXPORT_TAGS);
 
-#=======================================================================
-#  NON=EXPORTED PACKAGE GLOBALS
-#=======================================================================
-
-my  %linestyles =                               # allowed line styles
-(
-    boxes       => q{},
-    dots        => q{},
-    filledcurves=> q{},
-    fsteps      => q{},
-    histeps     => q{},
-    impulses    => q{},
-    lines       => q{},
-    linespoints => q{},
-    points      => q{},
-    steps       => q{},
-);
-
-my  $object_number   = 0;                       # number of created objects
+# Symbols to be exported by default
+@EXPORT_OK     = ( 'GnuplotIF' );
 
 #---------------------------------------------------------------------------
-#  warn if there is no graphic display
+#  Code common to gnuplot_plot_xy and gnuplot_plot_y to allow user-specified
+#  titles set by gnuplot_set_plot_titles.  This code assumes the plot titles
+#  were all set in the command to the literal text "<PLOT_TITLE>", without any
+#  surrounding quotes.  This function replaces that text.
 #---------------------------------------------------------------------------
-if ( ! $ENV{'DISPLAY'} ) {
-	warn "Graphics::GnuplotIF : cannot find environment variable DISPLAY \n"
-}
-
-#
-#  Code common to gnuplot_plot_xy and gnuplot_plot_y to allow user-
-#  specified titles set by gnuplot_set_plot_titles.  This code assumes the
-#  plot titles were all set in the command to the literal text "<PLOT_TITLE>",
-#  without any surrounding quotes.  This function replaces that text.
-#
 my $private_apply_plot_titles = sub {
-    my ($self, $cmd_ref) = @_;
+    my ($self, $cmd_ref)   = @_;
     my $default_plot_title = q{-};              # Title if user did not specify one
     if (defined $self->{plot_titles} ) {
         #  Substitute each plot title sequentially with the user-supplied value
@@ -75,9 +53,33 @@ my $private_apply_plot_titles = sub {
     ${$cmd_ref} =~ s/title <PLOT_TITLE>/title "$default_plot_title"/g;
 };
 
-#=======================================================================
-#  MODULE CODE
-#=======================================================================
+#---------------------------------------------------------------------------
+#  Code generates a file comment for a plot script.
+#---------------------------------------------------------------------------
+my $private_plot_script_header  = sub {
+    my  ( $self )   = @_;
+    my  $localtime  = scalar localtime;
+
+    my  $comment;
+    ($comment = <<"END") =~ s/^\s+//gm;
+    #
+    # This file is a GNUPLOT plot script.
+    # It was generated automatically by '${0}'
+    # using the Graphics::GnuplotIF extension to perl.
+    # Creation time : ${localtime}
+    #
+END
+
+    $self->gnuplot_cmd( $comment );
+    return;
+};
+
+#---------------------------------------------------------------------------
+#  warn if there is no graphic display
+#---------------------------------------------------------------------------
+if ( ! $ENV{'DISPLAY'} ) {
+    warn "Graphics::GnuplotIF : cannot find environment variable DISPLAY \n"
+}
 
 #===  FUNCTION  ================================================================
 #         NAME:  new
@@ -89,53 +91,134 @@ my $private_apply_plot_titles = sub {
 #                 ylabel  => "",
 #                 xrange  => [],
 #                 yrange  => [],
+#             scriptfile  => "",
+#                persist  => 0,
+#             objectname  => "",
 #      RETURNS:  object reference
 #===============================================================================
-sub new {
+{
+    my  $object_number  = 0;                    # number of objects created
+    my  $error_log      = '.gnuplot.stderr.log';# catches the gnuplot STDERR output
 
-    my  $PIPE;
-    open $PIPE, '|- ', 'gnuplot'
-        or die "\n$0 : failed to open pipe to \"gnuplot\" : $!\n";
-    $PIPE->autoflush(1);
+    sub new {
 
-    my  ( $class, %args ) = @_;
+        my  ( $class, %args ) = @_;
+        my  $IOHANDLE;
 
-    my  $self   = {
-        style         => 'lines',
-        title         => q{},
-        xlabel        => q{},
-        ylabel        => q{},
-        xrange        => [],
-        yrange        => [],
-        %args,
-        __pipehandle  => $PIPE,
-        __pausetime   => -1,
-        __pausemess   => q{},
-        __objectnr    => ++$object_number,
-    };
+        my  $self   = {
+            style         => 'lines',
+            title         => q{},
+            xlabel        => q{},
+            ylabel        => q{},
+            xrange        => [],
+            yrange        => [],
+            plot_titles   => [],
+            scriptfile    => q{},
+            persist       => 0,
+            objectname    => q{},
+            silent_pause  => 1,
+            %args,
+            __pausetime   => -1,
+            __pausemess   => q{},
+            __output_type => q{},
+            __objectnumber=> ++$object_number,
+            __plotnumber  => 1,
+        };
 
-    bless $self, $class ;
+        bless $self, $class ;
 
-    $self->gnuplot_set_style (   $self->{style }  );
-    $self->gnuplot_set_title (   $self->{title }  );
-    $self->gnuplot_set_xlabel(   $self->{xlabel}  );
-    $self->gnuplot_set_ylabel(   $self->{ylabel}  );
-    $self->gnuplot_set_xrange( @{$self->{xrange}} );
-    $self->gnuplot_set_yrange( @{$self->{yrange}} );
+        # let plot windows survive after gnuplot exits
+        my  $persist    = q{};
+        if ( $self->{persist} == 1 ) {
+            $persist    = '-persist';
+        }
 
-    return $self;
-} # ----------  end of subroutine new  ----------
+        if ( $self->{scriptfile} eq q{} ) {
+            $self->{__output_type}  = 'pipe';
+            open $IOHANDLE, '|- ', "gnuplot ${persist} 2> $error_log"
+                or die "\n$0 : failed to open pipe to \"gnuplot\" : $!\n";
+            $IOHANDLE->autoflush(1);
+        }
+        else {
+            $self->{__output_type}  = 'file';
+            open $IOHANDLE, '>', $self->{scriptfile}
+                or die "\n$0 : failed to open file \"$self->{scriptfile}\" : $!\n";
+        }
+        $self->{__iohandle} = $IOHANDLE;
 
-#---------------------------------------------------------------------------
-#  DESTROY
-#---------------------------------------------------------------------------
+        $self->$private_plot_script_header();
+        $self->gnuplot_set_style (   $self->{style }  );
+        $self->gnuplot_set_title (   $self->{title }  );
+        $self->gnuplot_set_xlabel(   $self->{xlabel}  );
+        $self->gnuplot_set_ylabel(   $self->{ylabel}  );
+        $self->gnuplot_set_xrange( @{$self->{xrange}} );
+        $self->gnuplot_set_yrange( @{$self->{yrange}} );
+
+        return $self;
+    } # ----------  end of subroutine new  ----------
+}
+
+#===  CLASS METHOD  ============================================================
+#         NAME:  GnuplotIF
+#      PURPOSE:  constructor - short form
+#   PARAMETERS:  see new
+#===============================================================================
+sub GnuplotIF {
+    my  @args   = @_;
+    return __PACKAGE__->new(@args);
+}   # ----------  end of subroutine GnuplotIF  ----------
+
+#===  CLASS METHOD  ============================================================
+#         NAME:  DESTROY
+#      PURPOSE:  destructor - close pipe or file
+#   PARAMETERS:  ---
+#===============================================================================
 sub DESTROY {
     my  $self = shift;
-    close $self->{__pipehandle} or
-    print { *STDERR } "Graphics::GnuplotIF ($self->{__objectnr}):  "
-    ."problem closing communication to gnuplot\n";
+    if ( !close $self->{__iohandle} ) {
+        if ( $self->{__output_type} eq 'pipe' ) {
+            print { *STDERR } "Graphics::GnuplotIF (object $self->{__objectnumber}): "
+            ."problem closing communication to gnuplot\n";
+        }
+        if ( $self->{__output_type} eq 'file' ) {
+            print { *STDERR } "Graphics::GnuplotIF (object $self->{__objectnumber}): "
+            ."problem closing file $self->{scriptfile}\n";
+        }
+    }
     return;
 } # ----------  end of subroutine DESTROY  ----------
+
+#===  CLASS METHOD  ============================================================
+#         NAME:  gnuplot_set_style
+#      PURPOSE:  Sets one of the allowed line styles in a plot command.
+#   PARAMETERS:  plotstyle (string)
+#      RETURNS:  ---
+#     SEE ALSO:  new()
+#===============================================================================
+{
+    my  %linestyles =                               # allowed line styles
+    (
+        boxes       => q{},
+        dots        => q{},
+        filledcurves=> q{},
+        fsteps      => q{},
+        histeps     => q{},
+        impulses    => q{},
+        lines       => q{},
+        linespoints => q{},
+        points      => q{},
+        steps       => q{},
+    );
+
+    sub gnuplot_set_style {
+        my  $self   = shift;
+        my  $style  = shift;
+        if ( defined $style && exists $linestyles{$style} ) {
+            $self->{style}  = $style;
+        }
+        return;
+    } # ----------  end of subroutine gnuplot_set_style  ----------
+}
 
 #===  CLASS METHOD  ============================================================
 #         NAME:  gnuplot_plot_y
@@ -144,22 +227,23 @@ sub DESTROY {
 #      RETURNS:  ---
 #===============================================================================
 sub gnuplot_plot_y {
-    my  $parnr  = 0;
     my  ( $self, @yref )  = @_;
-    my  $cmd  = " '-' with $self->{style} title <PLOT_TITLE>," x (scalar @yref);
-    $cmd =~ s/,$//;
+    my  $parnr  = 0;
+    my  $cmd  = " '-' with $self->{style} title <PLOT_TITLE>,\\\n" x (scalar @yref);
+    $cmd =~ s/,\\$//s;
     $self->$private_apply_plot_titles(\$cmd); # Honor gnuplot_set_plot_titles
     return if $cmd eq q{};
 
-    print { $self->{__pipehandle}} "plot $cmd\n";
+    $self->gnuplot_cmd( "plot \\\n$cmd\n" );
 
     foreach my $item ( @yref ) {
         $parnr++;
-        die "Graphics::GnuplotIF ($self->{__objectnr}): gnuplot_plot_y : $parnr. "
-        ."argument not an array reference\n"
-        if ref($item) ne 'ARRAY';
-        print { $self->{__pipehandle}} join( "\n", @{$item}), "\ne\n";
+        die "Graphics::GnuplotIF (object $self->{__objectnumber}): gnuplot_plot_y : $parnr. "
+          ."argument not an array reference\n"
+          if ref($item) ne 'ARRAY';
+        $self->gnuplot_cmd( join( "\n", @{$item}), 'e' );
     }       # -----  end foreach  -----
+    $self->{__plotnumber}++;
     return;
 } # ----------  end of subroutine gnuplot_plot_y  ----------
 
@@ -174,22 +258,22 @@ sub gnuplot_plot_y {
 #                to contain the x-values for the following function values.
 #===============================================================================
 sub gnuplot_plot_xy {
-    my  $parnr  = 1;
     my  ( $self, $xref, @yref )   = @_;
-    my  $cmd  = " '-' using 1:2 with $self->{style} title <PLOT_TITLE>," x (scalar @yref);
-    $cmd =~ s/,$//;
+    my  $parnr  = 1;
+    my  $cmd  = " '-' using 1:2 with $self->{style} title <PLOT_TITLE>,\\\n" x (scalar @yref);
+    $cmd =~ s/,\\\n$//s;
     $self->$private_apply_plot_titles(\$cmd); # Honor gnuplot_set_plot_titles
     return if $cmd eq q{};
 
-    print { $self->{__pipehandle}} "plot $cmd\n";
+    $self->gnuplot_cmd( "plot \\\n$cmd\n" );
 
-    die "Graphics::GnuplotIF ($self->{__objectnr}): gnuplot_plot_xy : $parnr. "
+    die "Graphics::GnuplotIF (object $self->{__objectnumber}): gnuplot_plot_xy : $parnr. "
     ."argument not an array reference\n"
     if ref($xref) ne 'ARRAY';
 
     foreach my $j ( 0..$#yref ) {
         $parnr++;
-        die "Graphics::GnuplotIF ($self->{__objectnr}): gnuplot_plot_xy - "
+        die "Graphics::GnuplotIF (object $self->{__objectnumber}): gnuplot_plot_xy - "
         ."$parnr. argument not an array reference\n"
         if ref($yref[$j]) ne 'ARRAY';
 
@@ -197,13 +281,14 @@ sub gnuplot_plot_xy {
 
         my  $min    = $#{$xref} < $#{$yref[$j]}  ?  $#{$xref}  :  $#{$yref[$j]};
         foreach my $i ( 0..$min ) {
-            print { $self->{__pipehandle}} "$$xref[$i] $yref[$j]->[$i]\n";
+            $self->gnuplot_cmd( "$$xref[$i] $yref[$j]->[$i]" );
         }
-        print { $self->{__pipehandle}} "e\n";
+        $self->gnuplot_cmd( 'e' );
     }
+    $self->{__plotnumber}++;
     return;
 } # ----------  end of subroutine gnuplot_plot_xy  ----------
-  
+
 #===  CLASS METHOD  ============================================================
 #         NAME:  gnuplot_plot_xy_style
 #      PURPOSE:  x-y-plot(s) with each graph using individual settings
@@ -217,31 +302,31 @@ sub gnuplot_plot_xy {
 #                to contain pairs of values and settings.
 #===============================================================================
 sub gnuplot_plot_xy_style {
-    my  $parnr  = 1;
     my  ( $self, $xref, @yref )   = @_;
+    my  $parnr  = 1;
     my  ( $cmd, @cmd );
 
     foreach my $j ( 0..$#yref ) {
-        die "Graphics::GnuplotIF ($self->{__objectnr}): gnuplot_plot_xy_style - "
+        die "Graphics::GnuplotIF (object $self->{__objectnumber}): gnuplot_plot_xy_style - "
         .($parnr + $j + 1).". argument not a suitable hash reference\n"
         if ! (ref($yref[$j]) eq 'HASH'
-		&& exists $yref[$j]->{'style_spec'} && exists $yref[$j]->{'y_values'});
+        && exists $yref[$j]->{'style_spec'} && exists $yref[$j]->{'y_values'});
 
-        push @cmd, " '-' using 1:2 with $yref[$j]->{'style_spec'} title <PLOT_TITLE>";    
+        push @cmd, " '-' using 1:2 with $yref[$j]->{'style_spec'} title <PLOT_TITLE>";
     }
-    $cmd = join(", \\\n", @cmd);
+    $cmd = join ", \\\n", @cmd;
     $self->$private_apply_plot_titles(\$cmd); # Honor gnuplot_set_plot_titles
     return if $cmd eq q{};
 
-    print { $self->{__pipehandle}} "plot $cmd\n";
+    $self->gnuplot_cmd( "plot \\\n$cmd" );
 
-    die "Graphics::GnuplotIF ($self->{__objectnr}): gnuplot_plot_xy_style : $parnr. "
+    die "Graphics::GnuplotIF (object $self->{__objectnumber}): gnuplot_plot_xy_style : $parnr. "
     ."argument not an array reference\n"
     if ref($xref) ne 'ARRAY';
 
     foreach my $j ( 0..$#yref ) {
         $parnr++;
-        die "Graphics::GnuplotIF ($self->{__objectnr}): gnuplot_plot_xy_style - "
+        die "Graphics::GnuplotIF (object $self->{__objectnumber}): gnuplot_plot_xy_style - "
         ."$parnr. argument is missing an array reference\n"
         if ref($yref[$j]->{'y_values'}) ne 'ARRAY';
 
@@ -251,10 +336,11 @@ sub gnuplot_plot_xy_style {
                     ? $#{$xref}
                     : $#{$yref[$j]->{'y_values'}};
         foreach my $i ( 0..$min ) {
-            print { $self->{__pipehandle}} "$$xref[$i] $yref[$j]->{'y_values'}->[$i]\n";
+            $self->gnuplot_cmd( "$$xref[$i] $yref[$j]->{'y_values'}->[$i]" );
         }
-        print { $self->{__pipehandle}} "e\n";
+        $self->gnuplot_cmd( 'e' );
     }
+    $self->{__plotnumber}++;
     return;
 } # ----------  end of subroutine gnuplot_plot_xy_style  ----------
 
@@ -270,16 +356,46 @@ sub gnuplot_plot_equation {
     my  @leftside;
 
     foreach my $equ ( @equations ) {
-        print { $self->{__pipehandle} } "$equ\n";
+        $self->gnuplot_cmd( "$equ" );
         ( $leftside ) = split /=/, $equ;
         push @leftside, $leftside;
     }       # -----  end foreach  -----
     @leftside = map  {$_." with $self->{style}"} @leftside;
     $leftside = join ', ', @leftside;
     return if $leftside eq q{};
-    print { $self->{__pipehandle}} "plot $leftside\n";
+    $self->gnuplot_cmd( "plot $leftside" );
+    $self->{__plotnumber}++;
     return;
 } # ----------  end of subroutine gnuplot_plot_equation  ----------
+
+#===  CLASS METHOD  ============================================================
+#         NAME:  gnuplot_plot_3d
+#      PURPOSE:  Draw 3-d plots.
+#   PARAMETERS:  Reference to a 2-D-matrix containing the z-values.
+#      RETURNS:  ---
+#===============================================================================
+sub gnuplot_plot_3d {
+    my  ( $self, $arrayref )  = @_;
+    my  $parnr  = 0;
+    my  $cmd  = " '-' matrix with $self->{style} title <PLOT_TITLE>," ;
+    $cmd =~ s/,$//;
+    $self->$private_apply_plot_titles(\$cmd); # Honor gnuplot_set_plot_titles
+    return if $cmd eq q{};
+
+    $self->gnuplot_cmd( "splot $cmd" );
+
+    die "Graphics::GnuplotIF (object $self->{__objectnumber}): gnuplot_plot_3d : "
+        ."argument not an array reference\n"
+    if ref($arrayref) ne 'ARRAY';
+
+    foreach my $i ( @{$arrayref} ) {
+        $self->gnuplot_cmd( join q{ }, @{$i} ) ;
+    }
+    $self->gnuplot_cmd( "\ne" );
+
+    $self->{__plotnumber}++;
+    return;
+} # ----------  end of subroutine gnuplot_plot_3d  ----------
 
 #===  CLASS METHOD  ============================================================
 #         NAME:  gnuplot_pause
@@ -294,21 +410,24 @@ sub gnuplot_plot_equation {
 #===============================================================================
 sub gnuplot_pause {
     my  ( $self, $pause, $message ) = @_;
-    if ( defined $pause && $pause =~ m/[+-]?(\d+|\d+\.\d*|\d*\.\d+)/) {
+    if ( defined $pause && $pause =~ m/[+-]?(\d+|\d+\.\d*|\d*\.\d+)/x ) {
         $self->{__pausetime}    = $pause;
     }
     if ( defined $message && $message ne q{} ) {
         $self->{__pausemess}    = "\"$message\"";
     }
+    my  $msg0 = "Graphics::GnuplotIF (object $self->{__objectnumber}):  $self->{__pausemess}  --  ";
+    my  $msg1 = "hit RETURN to continue \n";
+    my  $msg2 = "wait $self->{__pausetime} second(s) \n";
     if ( $self->{__pausetime} <= 0 ) {
-        print "Graphics::GnuplotIF ($self->{__objectnr}):  $self->{__pausemess}  --  "
-        ."hit RETURN to continue \n";
-        my $dummy = <STDIN>;                           # hit RETURN to go on
+        print "$msg0$msg1";
+        my $dummy = <>;                         # hit RETURN to go on
     }
     else {
-        print "Graphics::GnuplotIF ($self->{__objectnr}):  $self->{__pausemess}  --  "
-        ."wait $self->{__pausetime} second(s) \n";
-        print { $self->{__pipehandle}} "pause $self->{__pausetime} \n";
+        if ( $self->{silent_pause} == 1 ) {
+            print "$msg0$msg2";
+        }
+        $self->gnuplot_cmd( "pause $self->{__pausetime} \n" );
     }
     return;
 }   # ----------  end of subroutine gnuplot_pause  ----------
@@ -322,9 +441,42 @@ sub gnuplot_pause {
 sub gnuplot_cmd {
     my  ($self, @commands)  = @_;
     @commands = map {$_."\n"} @commands;
-    print { $self->{__pipehandle}} @commands;
+    print { $self->{__iohandle}} @commands
+        or croak "Couldn't write to pipe: $!";
     return;
 } # ----------  end of subroutine gnuplot_cmd  ----------
+
+#===  CLASS METHOD  ============================================================
+#         NAME:  gnuplot_hardcopy
+#      PURPOSE:  Write a plot into a file.
+#   PARAMETERS:  1. file name
+#                2. gnuplot terminal type
+#                3. terminal settings (optional)
+#      RETURNS:  ---
+#===============================================================================
+sub gnuplot_hardcopy {
+    my  ($self, $filename, $terminal, @keywords)  = @_;
+
+    # remember the current terminal including its settings
+    $self->gnuplot_cmd( 'set terminal push' );
+
+    my  $set_terminal   = "set terminal $terminal @keywords\n";
+    my  $set_output     = "set output \"$filename\"\n";
+    $self->gnuplot_cmd( $set_terminal, $set_output );
+    return;
+} # ----------  end of subroutine gnuplot_hardcopy  ----------
+
+#===  CLASS METHOD  ============================================================
+#         NAME:  gnuplot_restore_terminal
+#      PURPOSE:  Restore the terminal settings before the last hardcopy.
+#   PARAMETERS:  ---
+#      RETURNS:  ---
+#===============================================================================
+sub gnuplot_restore_terminal {
+    my  ($self)  = @_;
+    $self->gnuplot_cmd( 'set output', 'set terminal pop' );
+    return;
+} # ----------  end of subroutine gnuplot_restore_terminal  ----------
 
 #===  CLASS METHOD  ============================================================
 #         NAME:  gnuplot_set_plot_titles
@@ -334,7 +486,6 @@ sub gnuplot_cmd {
 #===============================================================================
 sub gnuplot_set_plot_titles {
     my  ( $self, @user_plot_titles )  = @_;
-
     my @plot_titles = @user_plot_titles;
     $self->{plot_titles} = \@plot_titles;
     return;
@@ -342,7 +493,7 @@ sub gnuplot_set_plot_titles {
 
 #===  CLASS METHOD  ============================================================
 #         NAME:  gnuplot_reset
-#      PURPOSE:  Set all options set with the set command to their 
+#      PURPOSE:  Set all options set with the set command to their
 #                gnuplot default values.
 #   PARAMETERS:  ---
 #      RETURNS:  ---
@@ -350,25 +501,9 @@ sub gnuplot_set_plot_titles {
 sub gnuplot_reset {
     my  ($self)  = @_;
     $self->{plot_titles} = undef;
-    print { $self->{__pipehandle}} "reset\n";
+    $self->gnuplot_cmd( 'reset' );
     return;
 } # ----------  end of subroutine gnuplot_reset  ----------
-
-#===  CLASS METHOD  ============================================================
-#         NAME:  gnuplot_set_style
-#      PURPOSE:  Sets one of the allowed line styles in a plot command.
-#   PARAMETERS:  plotstyle (string)
-#      RETURNS:  ---
-#     SEE ALSO:  new()
-#===============================================================================
-sub gnuplot_set_style {
-    my  $self   = shift;
-    my  $style  = shift;
-    if ( defined $style && exists $linestyles{$style} ) {
-        $self->{style}  = $style;
-    }
-    return;
-} # ----------  end of subroutine gnuplot_set_style  ----------
 
 #===  CLASS METHOD  ============================================================
 #         NAME:  gnuplot_set_title
@@ -379,7 +514,7 @@ sub gnuplot_set_style {
 sub gnuplot_set_title {
     my  ( $self, $title ) = @_;
     if ( defined $title ) {
-        print { $self->{__pipehandle}} "set title  \"$title\"\n"
+        $self->gnuplot_cmd( "set title  \"$title\"" );
     };
     return;
 } # ----------  end of subroutine gnuplot_set_title  ----------
@@ -393,7 +528,7 @@ sub gnuplot_set_title {
 sub gnuplot_set_xlabel {
     my  ( $self, $xlabel )    = @_;
     if ( defined $xlabel ) {
-        print { $self->{__pipehandle}} "set xlabel  \"$xlabel\"\n"
+        $self->gnuplot_cmd( "set xlabel  \"$xlabel\"" );
     };
     return;
 } # ----------  end of subroutine gnuplot_set_xlabel  ----------
@@ -407,7 +542,7 @@ sub gnuplot_set_xlabel {
 sub gnuplot_set_ylabel {
     my  ( $self, $ylabel )    = @_;
     if ( defined $ylabel ) {
-        print { $self->{__pipehandle}} "set ylabel  \"$ylabel\"\n"
+        $self->gnuplot_cmd( "set ylabel  \"$ylabel\"" );
     };
     return;
 } # ----------  end of subroutine gnuplot_set_ylabel  ----------
@@ -422,7 +557,7 @@ sub gnuplot_set_ylabel {
 sub gnuplot_set_xrange {
     my  ( $self, $xleft, $xright )  = @_;
     if ( defined $xleft && defined $xright ) {
-        print { $self->{__pipehandle}} "set xrange [ $xleft : $xright ]\n";
+        $self->gnuplot_cmd( "set xrange [ $xleft : $xright ]" );
     }
     return;
 } # ----------  end of subroutine gnuplot_set_xrange  ----------
@@ -437,15 +572,41 @@ sub gnuplot_set_xrange {
 sub gnuplot_set_yrange {
     my  ( $self, $yleft, $yright )  = @_;
     if ( defined $yleft && defined $yright ) {
-        print { $self->{__pipehandle}} "set yrange [ $yleft : $yright ]\n";
+        $self->gnuplot_cmd( "set yrange [ $yleft : $yright ]" );
     }
     return;
 } # ----------  end of subroutine gnuplot_set_yrange  ----------
 
+#===  CLASS METHOD  ============================================================
+#         NAME:  gnuplot_get_plotnumber
+#      PURPOSE:  Get the (internal) plot number
+#   PARAMETERS:  ---
+#      RETURNS:  object number
+#===============================================================================
+sub gnuplot_get_plotnumber {
+    my  ( $self )   = @_;
+    return $self->{__plotnumber};
+}   # ----------  end of subroutine gnuplot_get_plotnumber  ----------
+
+#===  CLASS METHOD  ============================================================
+#         NAME:  gnuplot_get_object_id
+#      PURPOSE:  Get the (internal) object number
+#   PARAMETERS:  ---
+#      RETURNS:  object number
+#===============================================================================
+sub gnuplot_get_object_id {
+    my  ( $self )   = @_;
+    if ( wantarray ) {
+        return ( $self->{__objectnumber}, $self->{objectname} );
+    }
+    else {
+        return $self->{__objectnumber};
+    }
+}   # ----------  end of subroutine gnuplot_get_object_id  ----------
+
 END { }                                         # module clean-up code
 
 1;
-
 
 #__END__
 #%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -458,17 +619,17 @@ Graphics::GnuplotIF - A dynamic Perl interface to gnuplot
 
 =head1 VERSION
 
-This documentation refers to Graphics::GnuplotIF version 1.3
+This documentation refers to Graphics::GnuplotIF version 1.4
 
 =head1 SYNOPSIS
 
-  use Graphics::GnuplotIF;
+  use Graphics::GnuplotIF qw(GnuplotIF);
 
-  my  @x   = ( -2, -1.50,  -1,  -0.50,  0,  0.50,  1, 1.50, 2 ); # x values
-  my  @y1  = (  4,  2.25,   1,   0.25,  0,  0.25,  1, 2.25, 4 ); # function 1
-  my  @y2  = (  2,  0.25,  -1,  -1.75, -2, -1.75, -1, 0.25, 2 ); # function 2
+  my  @x  = ( -2, -1.50, -1, -0.50,  0,  0.50,  1, 1.50, 2 ); # x values
+  my  @y1 = (  4,  2.25,  1,  0.25,  0,  0.25,  1, 2.25, 4 ); # function 1
+  my  @y2 = (  2,  0.25, -1, -1.75, -2, -1.75, -1, 0.25, 2 ); # function 2
 
-  my  $plot1  = Graphics::GnuplotIF->new( title => "line", style => "points" );
+  my  $plot1 = Graphics::GnuplotIF->new(title => "line", style => "points");
 
   $plot1->gnuplot_plot_y( \@x );              # plot 9 points over 0..8
 
@@ -476,10 +637,9 @@ This documentation refers to Graphics::GnuplotIF version 1.3
 
   $plot1->gnuplot_set_title( "parabola" );    # new title
   $plot1->gnuplot_set_style( "lines" );       # new line style
+  $plot1->gnuplot_plot_xy( \@x, \@y1, \@y2 ); # rewrite plot1: y1, y2 over x
 
-  $plot1->gnuplot_plot_xy( \@x, \@y1, \@y2 ); # rewrite plot1 : y1 and y2 over x
-
-  my  $plot2  = Graphics::GnuplotIF->new;
+  my  $plot2  = Graphics::GnuplotIF->new;     # new plot object
 
   $plot2->gnuplot_set_xrange(  0, 4 );        # set x range
   $plot2->gnuplot_set_yrange( -2, 2 );        # set y range
@@ -496,30 +656,44 @@ This documentation refers to Graphics::GnuplotIF version 1.3
 
   $plot2->gnuplot_pause( );                   # hit RETURN to continue
 
+  my  $plot3  = GnuplotIF;                    # new plot object
+
+  my    @xyz    = (                           # 2-D-matrix, z-values
+    [0,  1,  4,  9],
+    [1,  2,  6, 15],
+    [4,  6, 12, 27],
+    [9, 15, 27, 54],
+  );
+
+  $plot3->gnuplot_cmd( "set grid" );          # send a gnuplot command
+  $plot3->gnuplot_set_plot_titles("surface"); # set legend
+  $plot3->gnuplot_plot_3d( \@xyz );           # start 3-D-plot
+  $plot3->gnuplot_pause( );                   # hit RETURN to continue
 
 =head1 DESCRIPTION
 
 Graphics::GnuplotIF is a simple and easy to use dynamic Perl interface to
 B<gnuplot>.  B<gnuplot> is a freely available, command-driven graphical display
 tool for Unix.  It compiles and works quite well on a number of Unix flavours
-as well as other operating systems. 
+as well as other operating systems.
 
 This module enables sending display requests asynchronously to B<gnuplot>
 through simple Perl subroutine calls.
 
-Graphics::GnuplotIF starts B<gnuplot> as a separate process. The plot commands
-are send through a I<pipe>. The graphical output from B<gnuplot> will be
-displayed immediately.
+A gnuplot session is an instance of class Graphics::GnuplotIF.  The constructor
+starts B<gnuplot> as a separate process for each session. The plot commands are
+send through a I<pipe>. The graphical output from B<gnuplot> will be displayed
+immediately.
 
 Several independent plots can be started from one script.  Each plot has its
-own pipe.  All pipes will be closed automatically when the script terminates.
-The B<gnuplot> processes terminate when the corresponding pipes are closed.
-Their graphical output will now disappear.
+own pipe.  All pipes will be closed automatically by the destructor when the
+script terminates.  The B<gnuplot> processes terminate when the corresponding
+pipes are closed.  Their graphical output will now disappear (but see parameter
+L<persist|new>).
 
 Graphics::GnuplotIF is similar to C< gnuplot_i >, a C interface to B<gnuplot>
 ( http://ndevilla.free.fr/gnuplot/ ), and to  C< gnuplot_i++ >, a C++ interface
 to B<gnuplot> ( http://jijo.cjb.net/code/cc++ ).
-
 
 =head1 SUBROUTINES/METHODS
 
@@ -527,7 +701,6 @@ An object of this class represents an interface to a running B<gnuplot>
 process.  During the creation of an object such an process will be started for
 each such object.  Communication is done through an unidirectional pipe; the
 resulting  stream  is  write-only.
-
 
 =head2 new
 
@@ -539,24 +712,48 @@ handle:
 A few named arguments can be passed as key - value  pairs (here shown with
 their default values):
 
-  style   => "lines",     # one of the gnuplot line styles (see below)
-  title   => "",          # string
-  xlabel  => "x",         # string
-  ylabel  => "y",         # string
-  xrange  => [],          # array reference; autoscaling, if empty
-  xrange  => [],          # array reference; autoscaling, if empty
+
+  style        => 'lines', # one of the gnuplot line styles (see below)
+  title        => '',      # string
+  xlabel       => 'x',     # string
+  ylabel       => 'y',     # string
+  xrange       => [],      # array reference; autoscaling, if empty
+  xrange       => [],      # array reference; autoscaling, if empty
+  plot_titles  => [],      # array of strings; titles used in the legend
+  scriptfile   => '',      # write all plot commands to the specified file
+  persist      => 0,       # let plot windows survive after gnuplot exits
+                           # 0 : close / 1 : survive
+  objectname   => '',      # an optional name for the object
+  silent_pause => 1,       # 0 suppress message from gnuplot_pause()
 
 These attributes are stored in each object.
+
 Allowed line styles are
 
   boxes     dots   filledcurves  fsteps  histeps
   impulses  lines  linespoints   points  steps
+
+The generated B<gnuplot> commands can be stored to a file instead of beeing
+executed immediately.  This file can be used as input to B<gnuplot>, e.g.
+
+  gnuplot < function_set_1.gnuplot
+
+A script file can also be used for checking the commands send to B<gnuplot>.
 
 The objects are automatically deleted by a destructor.  The destructor closes
 the pipe to the B<gnuplot> process belonging to that object.  The B<gnuplot>
 process will also terminate and remove the graphic output.  The termination can
 be controlled by the method L<C<gnuplot_pause> | gnuplot_pause> .
 
+=head2 GnuplotIF
+
+The short form of the constructor above (L<C<new>|new>):
+
+  use Graphics::GnuplotIF qw(GnuplotIF);
+
+  $plot1  = GnuplotIF;
+
+This subroutine is exported only on request.
 
 =head2  gnuplot_plot_y
 
@@ -575,15 +772,17 @@ assumed to contain the x-values for the following function values.
 =head2 gnuplot_plot_xy_style
 
   %y1 = ( 'y_values' => \@y1, 'style_spec' => "lines lw 3" );
-  %y2 = ( 'y_values' => \@y2, 'style_spec' => "points pointtype 4 pointsize 5" );
+  %y2 = ( 'y_values' => \@y2, 
+          'style_spec' => "points pointtype 4 pointsize 5" );
 
   $plot1->gnuplot_plot_xy_style( \@x, \%y1, \%y2 );
 
-C<gnuplot_plot_xy_style> takes one array reference and one or more hash references.
-The first array is assumed to contain the x-values for the following function
-values. The following hashes are assumed to contain pairs of y-values and individual
-style specifications for use in the plot command. The 'style_spec' settings are
-placed between C<with> and C<title> of B<gnuplot>'s C<plot> command.
+C<gnuplot_plot_xy_style> takes one array reference and one or more hash
+references.  The first array is assumed to contain the x-values for the
+following function values. The following hashes are assumed to contain pairs of
+y-values and individual style specifications for use in the plot command. The
+'style_spec' settings are placed between C<with> and C<title> of B<gnuplot>'s
+C<plot> command.
 
 =head2 gnuplot_plot_equation
 
@@ -597,24 +796,32 @@ strings.  The plot ranges can be controlled by
 L<C<gnuplot_set_xrange>|gnuplot_set_xrange> and
 L<C<gnuplot_set_yrange>|gnuplot_set_yrange> .
 
+=head2 gnuplot_plot_3d
+
+  $plot2->gnuplot_plot_3d( \@array );    # 3-D-plot
+
+C<gnuplot_plot_3d> takes one reference to an 2-D-array of z-values.
 
 =head2 gnuplot_pause
-
 
   $plot1->gnuplot_pause( [time] [,text] );
 
 This is an emulation of the B<gnuplot> C<pause> command.  It displays any text
 associated with the command and waits a specified amount of time or until the
-carriage return is pressed.
+carriage return is pressed. The message can be suppressed by  
+
+  silent_pause => 0
+
+given to the constructor (see L<new | new>).
 
 C<time> may be any constant or expression. Choosing -1 (default) will wait
 until a carriage return is hit, zero (0) won't pause at all, and a positive
-number will wait the specified number of seconds.
+number will wait the specified number of seconds. 
 
 The time value and the text are stored in the object and reused.  A sequence
 like
 
-  $plot1->gnuplot_pause( 5 );            # delay is 5 seconds
+  $plot1->gnuplot_pause( 5.5 );          # delay is 5.5 seconds
   $plot1->gnuplot_plot_y( \@y1 );
 
   $plot1->gnuplot_pause( );
@@ -637,21 +844,86 @@ will display 3 plots with 5 seconds delay and wait for a final carriage return.
 C<gnuplot_cmd> can be used to send one or more B<gnuplot> commands, especially
 those not wrapped by a Graphics::GnuplotIF method.
 
+=head2 gnuplot_reset
 
-=head3 Write a plot into a file
+  $plot1->gnuplot_reset();
 
-C<gnuplot_cmd> can be used to write a plot into a file or make a hardcopy by
-setting/resetting the terminal and the output file:
+Set all options set with the C<set> command to their B<gnuplot> default values.
 
-  $plot1->gnuplot_cmd( 'set terminal png',
-                       'set output   "test-plot-1.png" ' );
+=head2 gnuplot_set_style
+
+  $plot1->gnuplot_set_style( "steps" );   # new line style
+
+Sets one of the allowed line styles (see L<new | new>)
+in a plot command.
+
+=head2 gnuplot_set_title
+
+  $plot1->gnuplot_set_title("parabola");  # new title
+
+Sets the plot title.
+Equivalent to the B<gnuplot> command C<set title "parabola">.
+
+=head2 gnuplot_set_xlabel
+
+  $plot1->gnuplot_set_xlabel("time (days)");
+
+Sets the x axis label.
+Equivalent to the B<gnuplot> command C<set xlabel "time (days)">.
+
+=head2 gnuplot_set_ylabel
+
+  $plot1->gnuplot_set_ylabel("bugs fixed");
+
+Sets the y axis label.
+Equivalent to the B<gnuplot> command C<set ylabel "bugs fixed">.
+
+=head2 gnuplot_set_xrange
+
+  $plot1->gnuplot_set_xrange( left, right );
+
+Sets the horizontal range that will be displayed.
+Equivalent to the B<gnuplot> command C<set xrange [left:right]>.
+
+=head2 gnuplot_set_yrange
+
+  $plot1->gnuplot_set_yrange( low, high );
+
+Sets the vertical range that will be displayed.
+Equivalent to the B<gnuplot> command C<set yrange [low:high]>.
+
+=head2 gnuplot_set_plot_titles
+
+  $plot1->gnuplot_set_plot_titles( @ytitles );
+
+Sets the list of titles used in the key for each of the y-coordinate data sets
+specified in subsequent calls to gnuplot_plot_xy or gnuplot_plot_y commands.
+This is not equivalent to a complete B<gnuplot> command; rather it adds a
+C<title> clause to each data set specified in a B<gnuplot> C<plot> command.
+
+=head2 gnuplot_hardcopy
+
+C<gnuplot_cmd> can be used to write a plot into a file or make a printable file
+by setting/resetting the terminal and the output file:
+
+  $plot1->gnuplot_hardcopy( 'function1.gnuplot.ps', 
+                            'postscript', 
+                            'color lw 3' );
 
   $plot1->gnuplot_plot_xy( \@x, \@y1, \@y2 );
 
-  $plot1->gnuplot_cmd( 'set output',
-                       'set terminal x11' );
+  $plot1->gnuplot_restore_terminal();
 
-=head3 Make a hardcopy
+The 1. parameter is a file name,  the 2. parameter is a B<gnuplot> terminal type,
+the 3. parameter is a string with additional terminal parameters (optional).
+The current terminal settings will be saved.
+
+=head2 gnuplot_restore_terminal
+
+Restores the saved terminal settings after a call to C<gnuplot_hardcopy()>.
+Output will go to C<STDOUT> again.
+
+=head3 Print a plot directly
 
 A hardcopy can be made with an appropriate output format and a pipe to a
 printer:
@@ -664,80 +936,50 @@ printer:
   $plot1->gnuplot_cmd( 'set output',
                        'set terminal x11' );
 
-=head2 gnuplot_reset
+=head2 gnuplot_get_object_id
 
-  $plot1->gnuplot_reset();
+Get the (internal) object number (and the object name):
 
-Set all options set with the C<set> command to their B<gnuplot> default values.
+   $obj_number              = $plot1->gnuplot_get_object_id();
+  ($obj_number, $obj_name)  = $plot1->gnuplot_get_object_id();
 
+The object number is set automatically by the constructor.  The object name can
+be set by the constructor (objectname => 'MyName').
 
+=head2 gnuplot_get_plotnumber
 
-=head2 gnuplot_set_style
+Get the (internal) plot number of the B<next> plot:
 
-  $plot1->gnuplot_set_style( "steps" );   # new line style
+   $plot_number             = $plot1->gnuplot_get_plotnumber()
 
-Sets one of the allowed line styles (see L<new | new>)
-in a plot command.
+The plot number is set automatically by the constructor starting with 1.  Each
+call to
 
+  gnuplot_plot_y
+  gnuplot_plot_xy
+  gnuplot_plot_xy_style
+  gnuplot_plot_equation
+  gnuplot_plot_3d
 
-=head2 gnuplot_set_title
+increments this number by 1. This can be used to identify single plots, e.g.
+with
 
-  $plot1->gnuplot_set_title("parabola");  # new title
+  $plot->gnuplot_cmd( "set timestamp \"plot number ${plot_number} / %c\"" );
 
-Sets the plot title.
-Equivalent to the B<gnuplot> command C<set title "parabola">.
+=head1 EXPORTS
 
-
-=head2 gnuplot_set_xlabel
-
-  $plot1->gnuplot_set_xlabel("time (days)");
-
-Sets the x axis label.
-Equivalent to the B<gnuplot> command C<set xlabel "time (days)">.
-
-
-=head2 gnuplot_set_ylabel
-
-  $plot1->gnuplot_set_ylabel("bugs fixed");
-
-Sets the y axis label.
-Equivalent to the B<gnuplot> command C<set ylabel "bugs fixed">.
-
-
-=head2 gnuplot_set_xrange
-
-  $plot1->gnuplot_set_xrange( left, right );
-
-Sets the horizontal range that will be displayed.
-Equivalent to the B<gnuplot> command C<set xrange [left:right]>.
-
-
-
-=head2 gnuplot_set_yrange
-
-  $plot1->gnuplot_set_yrange( low, high );
-
-Sets the vertical range that will be displayed.
-Equivalent to the B<gnuplot> command C<set yrange [low:high]>.
-
-
-=head2 gnuplot_set_plot_titles
-
-  $plot1->gnuplot_set_plot_titles( @ytitles );
-
-Sets the list of titles used in the key for each of the y-coordinate data sets
-specified in subsequent calls to gnuplot_plot_xy or gnuplot_plot_y commands.
-This is not equivalent to a complete B<gnuplot> command; rather it adds a
-C<title> clause to each data set specified in a B<gnuplot> C<plot> command.
-
+B<GnuplotIF>     constructor, short form (see L<C<GnuplotIF> | GnuplotIF>).
 
 =head1 DIAGNOSTICS
 
-Dialog messages and diagnostic messages start with  C< Graphics::GnuplotIF (NR): ... > .
+Dialog messages and diagnostic messages start with  
+C< Graphics::GnuplotIF (object NR): ... > .
 
 C<NR> is the number of the corresponding Graphics::GnuplotIF object and output
 stream.  NR counts the objects in the order of their generation.
 
+The gnuplot messages going to STDERR will be redirected to the file
+C<.gnuplot.stderr.log>.
 
 =head1 CONFIGURATION AND ENVIRONMENT
 
@@ -748,10 +990,13 @@ The environment variable DISPLAY is checked for the display.
 =over 2
 
 =item *
-B<gnuplot> ( http://sourceforge.net/projects/gnuplot ) must be installed.
+C<gnuplot> ( http://sourceforge.net/projects/gnuplot ) must be installed.
 
 =item *
-The module IO::Handle is used to handle output pipes.  Your operating system
+The module C<Carp> is used for error handling.
+
+=item *
+The module C<IO::Handle> is used to handle output pipes.  Your operating system
 must support pipes, of course.
 
 =back
@@ -759,7 +1004,6 @@ must support pipes, of course.
 =head1 INCOMPATIBILITIES
 
 There are no known incompatibilities.
-
 
 =head1 BUGS AND LIMITATIONS
 
@@ -772,17 +1016,15 @@ does not work. Use
 There are no known bugs in this module.  Please report problems to author.
 Patches are welcome.
 
-
 =head1 AUTHOR
 
 Dr.-Ing. Fritz Mehner (mehner@fh-swf.de)
 
-
 =head1 CREDITS
 
-Stephen Marshall (smarshall@wsi.com) contributed C<gnuplot_set_plot_titles>.
+Stephen Marshall (smarshall at wsi.com) contributed C<gnuplot_set_plot_titles>.
 
-Georg Bauhaus (bauhaus@futureapps.de) contributed C<gnuplot_plot_xy_style>.
+Georg Bauhaus (bauhaus at futureapps.de) contributed C<gnuplot_plot_xy_style>.
 
 =head1 LICENSE AND COPYRIGHT
 
