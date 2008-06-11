@@ -24,3 +24,8 @@ Revision history for Perl extension GnuplotIF.
   - New method gnuplot_plot_3d makes 3-D-plots from arrays.
   - New method gnuplot_hardcopy writes a plot into a file for printing.
   - New method gnuplot_restore_terminal restores terminal settings before the last hardcopy.
+
+1.5  June 11 2008
+  - Method gnuplot_plot_many() and gnuplot_plot_many_style for x-y-plots not sharing an x-axis.
+  - Most method calls can now be chained (thanks to Bruce Ravel for both).
+

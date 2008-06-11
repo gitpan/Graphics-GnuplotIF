@@ -14,14 +14,14 @@
 #       AUTHOR:  Dr.-Ing. Fritz Mehner (Mn), <mehner@fh-swf.de>
 #      COMPANY:  Fachhochschule Südwestfalen, Iserlohn
 #      CREATED:  27.08.2006 13:39:57 CEST
-#     REVISION:  $Id: GnuplotIF.t,v 1.8 2007/12/12 10:37:17 mehner Exp $
+#     REVISION:  $Id: GnuplotIF.t,v 1.11 2008/06/11 08:04:21 mehner Exp $
 #===============================================================================
 
 use strict;
 use warnings;
 use Math::Trig;
 
-use Test::More tests => 6;    # last test to print
+use Test::More tests => 7;    # last test to print
 
 use Graphics::GnuplotIF qw(GnuplotIF);
 
@@ -34,6 +34,7 @@ ok ( test3() , 'run Graphics::GnuplotIF demo 3' );
 ok ( test4() , 'run Graphics::GnuplotIF demo 4' );
 ok ( test5() , 'run Graphics::GnuplotIF demo 5' );
 ok ( test6() , 'run Graphics::GnuplotIF demo 6' );
+ok ( test7() , 'run Graphics::GnuplotIF demo 7' );
 
 #---------------------------------------------------------------------------
 #  test function 1
@@ -61,12 +62,12 @@ sub test1 {
 
     $plotnumber++;
     $plot1->gnuplot_cmd("set timestamp \"plot number ${plotnumber} / ${timeformat}\" bottom");
-    $plot1->gnuplot_plot_y( \@x );    # plot 9 points over 0..8
+    $plot1->gnuplot_plot_y( \@x );              # plot 9 points over 0..8
 
-    $plot1->gnuplot_pause($wait);     # wait
+    $plot1->gnuplot_pause($wait);               # wait
 
-    $plot1->gnuplot_set_title('parabola');    # new title
-    $plot1->gnuplot_set_style('lines');       # new line style
+    $plot1->gnuplot_set_title('parabola');      # new title
+    $plot1->gnuplot_set_style('lines');         # new line style
 
     $plotnumber++;
     $plot1->gnuplot_cmd("set timestamp \"plot number ${plotnumber} / ${timeformat}\" bottom");
@@ -137,8 +138,8 @@ sub test2 {
     );
     $plot->gnuplot_set_yrange( -1.5, +1.5 );    # set y range
     $plot->gnuplot_cmd('set xzeroaxis');
-    $plot->gnuplot_plot_y( \@x );
-    $plot->gnuplot_pause($wait);                # wait
+
+    $plot->gnuplot_plot_y( \@x )->gnuplot_pause($wait); # plot and wait
 
     $plot->gnuplot_plot_y( \@x );
 
@@ -181,8 +182,7 @@ sub test3 {
     foreach my $i ( 1 .. $steps ) {
         $n = 2 * $i - 1;
         $fourier .= " +sin($n*x)/$n";
-        $plot1->gnuplot_cmd("plot (4/pi)*($fourier)");
-        $plot1->gnuplot_pause(.4);
+        $plot1->gnuplot_cmd("plot (4/pi)*($fourier)")->gnuplot_pause(.4);
     }
 
     return 1;
@@ -194,7 +194,7 @@ sub test3 {
 sub test4 {
 
     if ( !$ENV{'DISPLAY'} ) { return 1; }    # no display; skip this test
-    my @x = ( 0, +1, +1, 0, -1, -1, 0, +1, +1, 0, -1, -1, 0 );    # x values
+    my @x  = ( 0, +1, +1, 0, -1, -1, 0, +1, +1, 0, -1, -1, 0 );   # x values
     my @y1 = ( 4, 2.25, 1, 0.25, 0, 0.25, 1, 2.25, 4 );           # function 1
 
     my $plot = Graphics::GnuplotIF->new(
@@ -234,8 +234,7 @@ sub test5 {
         }
     }
 
-    $plot->gnuplot_plot_3d( \@array );
-    $plot->gnuplot_pause(6);
+    $plot->gnuplot_plot_3d( \@array )->gnuplot_pause(6);
 
     return 1;
 }    # ----------  end of subroutine test5  ----------
@@ -274,10 +273,76 @@ sub test6 {
         $plot->gnuplot_cmd(
             "set timestamp \"plot number ${plotnumber} / %d/%m/%y %H:%M\""
         );
-        $plot->gnuplot_plot_xy( \@x, \@y );
-        $plot->gnuplot_pause(.4);
+        $plot->gnuplot_plot_xy( \@x, \@y )->gnuplot_pause(.4);
     }
 
     return 1;
 }    # ----------  end of subroutine test6  ----------
 
+
+#---------------------------------------------------------------------------
+#  test function 7
+#---------------------------------------------------------------------------
+sub test7 {
+
+    if ( !$ENV{'DISPLAY'} ) { return 1; }    # no display; skip this test
+
+    my @x1 = ( -2, -1.50, -1, -0.50,  0,  0.50,  1,  1.50, 2 ); # x values (1.set)
+    my @y1 = (  4,  2.25,  1,  0.25,  0,  0.25,  1,  2.25, 4 ); # y-values (1.set)
+
+    my @x2 = ( -4, -3.50, -3, -2.50, -2,  -1.50, -1, -0.50, 0 );# x values (2.set)
+    my @y2 = (  5,  3.25,  2,  1.25,  1,   1.25,  2,  3.25, 5 );# y-values (2.set)
+
+    my @x3 = (  0, 0.50, 1,  1.50,  2,  2.50,  3,  3.50, 4 );   # x values (3.set)
+    my @y3 = (  3, 1.25, 0, -0.75, -1, -0.75,  0,  1.25, 3 );   # y-values (3.set)
+
+    my $wait       = 3;
+    my $plotnumber = 0;
+
+    my $timeformat = '%d-%m-%y %H:%M:%S';
+
+    #---------------------------------------------------------------------------
+    #  plot object 1
+    #---------------------------------------------------------------------------
+    my $plot1 = Graphics::GnuplotIF->new(
+        title       => 'x-y-plot(s) not sharing an x-axis',
+        style       => 'lines',
+        plot_titles => ['function 1.1', 'function 1.2', 'function 1.3'],
+    );
+
+    $plotnumber++;
+    $plot1->gnuplot_cmd("set timestamp \"plot number ${plotnumber} / ${timeformat}\" bottom");
+    $plot1->gnuplot_plot_many( \@x1, \@y1 )->gnuplot_pause($wait);
+
+    $plotnumber++;
+    $plot1->gnuplot_cmd("set timestamp \"plot number ${plotnumber} / ${timeformat}\" bottom");
+    $plot1->gnuplot_plot_many( \@x1, \@y1, \@x2, \@y2 )->gnuplot_pause($wait);
+
+    $plotnumber++;
+    $plot1->gnuplot_cmd("set timestamp \"plot number ${plotnumber} / ${timeformat}\" bottom");
+    $plot1->gnuplot_plot_many( \@x1, \@y1, \@x2, \@y2, \@x3, \@y3 )->gnuplot_pause($wait);
+
+    my  %f1 = ( 'x_values' => \@x1, 'y_values' => \@y1, 'style_spec' => "lines lw 3" );
+    my  %f2 = ( 'x_values' => \@x2, 'y_values' => \@y2,
+                'style_spec' => "points pointtype 4 pointsize 5" );
+
+    $plot1->gnuplot_plot_many_style( \%f1, \%f2 )->gnuplot_pause($wait);
+
+    #---------------------------------------------------------------------------
+    #  plot object 2
+    #---------------------------------------------------------------------------
+    my @x21  = ( -2, -1.50, -1, -0.50,  0,  0.50,  1, 1.50, 2 ); # 9 points
+    my @y21  = (  4,  2.25,  1,  0.25,  0,  0.25,  1, 2.25, 4 ); # function 1
+
+    my @x22  = ( -1.1, -0.1, 0.9, 1.9, 2.9);    # 5 points
+    my @y22  = (  0.1,  0.2, 0.3, 0.4, 0.5);    # function 2
+
+    my $plot2 = Graphics::GnuplotIF->new(
+        title => "parabola",
+        style => "lines" 
+    );
+
+    $plot2->gnuplot_plot_many( \@x21, \@y21, \@x22, \@y22 )->gnuplot_pause($wait);
+
+    return 1;
+}    # ----------  end of subroutine test7  ----------

@@ -1,12 +1,15 @@
-# http://module-build.sourceforge.net/META-spec.html
-#XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
-name:         Graphics-GnuplotIF
-version:      1.4
-version_from: lib/Graphics/GnuplotIF.pm
-installdirs:  site
-requires:
+--- #YAML:1.0
+name:                Graphics-GnuplotIF
+version:             1.5
+abstract:            A dynamic Perl interface to gnuplot
+license:             ~
+author:              
+    - Dr.-Ing. Fritz Mehner <mehner@fh-swf.de>
+generated_by:        ExtUtils::MakeMaker version 6.44
+distribution_type:   module
+requires:     
     Test::More:                    0
     version:                       0
-
-distribution_type: module
-generated_by: ExtUtils::MakeMaker version 6.30
+meta-spec:
+    url:     http://module-build.sourceforge.net/META-spec-v1.3.html
+    version: 1.3
