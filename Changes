@@ -20,12 +20,18 @@ Revision history for Perl extension GnuplotIF.
 
 1.4  Nov 28 2007
   - Plot window can survive after gnuplot exits.
-  - Plot can be stored to a script file instead of beeing executed immediately.
+	- Plot can be stored to a script file instead of beeing executed immediately.
   - New method gnuplot_plot_3d makes 3-D-plots from arrays.
   - New method gnuplot_hardcopy writes a plot into a file for printing.
-  - New method gnuplot_restore_terminal restores terminal settings before the last hardcopy.
+	- New method gnuplot_restore_terminal restores terminal settings before the
+		last hardcopy.
 
 1.5  June 11 2008
-  - Method gnuplot_plot_many() and gnuplot_plot_many_style for x-y-plots not sharing an x-axis.
+	- Method gnuplot_plot_many() and gnuplot_plot_many_style for x-y-plots not
+		sharing an x-axis.
   - Most method calls can now be chained (thanks to Bruce Ravel for both).
 
+1.6  March 3 2011
+  - gnuplot_pause() not working as advertised.
+	- New constructor argument 'plot_also': write all plot commands to a file, in
+		addition show the plots.

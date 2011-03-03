@@ -1,4 +1,4 @@
-GnuplotIF version 1.5
+GnuplotIF version 1.6
 =====================
 
 GnuplotIF is a simple and easy to use Perl interface to gnuplot.  gnuplot is a
@@ -43,7 +43,7 @@ This module requires these other modules and libraries:
 
 COPYRIGHT AND LICENCE
 
-  Copyright (C) 2005-2008 by Fritz Mehner
+  Copyright (C) 2005-2011 by Fritz Mehner
 
   This module is free software; you can redistribute it and/or modify it under
   the same terms as Perl itself. See perlartistic.  This program is distributed

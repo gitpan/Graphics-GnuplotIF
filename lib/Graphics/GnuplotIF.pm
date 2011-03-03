@@ -9,10 +9,10 @@
 #         BUGS:  ---
 #        NOTES:  ---
 #       AUTHOR:  Dr.-Ing. Fritz Mehner (Mn), <mehner@fh-swf.de>
-#      COMPANY:  FH Suedwestfalen, Iserlohn
+#      COMPANY:  FH Südwestfalen, Iserlohn
 #      VERSION:  see $VERSION below
 #      CREATED:  16.07.2005 13:43:11 CEST
-#     REVISION:  $Id: GnuplotIF.pm,v 1.13 2008/06/11 08:07:08 mehner Exp $
+#     REVISION:  $Id: GnuplotIF.pm,v 1.16 2011/03/03 20:15:14 mehner Exp $
 #===============================================================================
 
 package Graphics::GnuplotIF;
@@ -22,7 +22,7 @@ use warnings;
 use Carp;
 use IO::Handle;
 
-our $VERSION     = '1.5';                       # version number
+our $VERSION     = '1.6';                       # version number
 
 use base qw(Exporter);
 use vars qw(@ISA @EXPORT_OK %EXPORT_TAGS);
@@ -102,27 +102,28 @@ if ( ! $ENV{'DISPLAY'} ) {
     sub new {
 
         my  ( $class, %args ) = @_;
-        my  $IOHANDLE;
 
         my  $self   = {
-            style         => 'lines',
-            title         => q{},
-            xlabel        => q{},
-            ylabel        => q{},
-            xrange        => [],
-            yrange        => [],
-            plot_titles   => [],
-            scriptfile    => q{},
-            persist       => 0,
-            objectname    => q{},
-            silent_pause  => 1,
+            style           => 'lines',
+            title           => q{},
+            xlabel          => q{},
+            ylabel          => q{},
+            xrange          => [],
+            yrange          => [],
+            plot_titles     => [],
+            scriptfile      => q{},
+            persist         => 0,
+            objectname      => q{},
+            silent_pause    => 1,
+            plot_also       => 0,
             %args,
-            __pausetime   => -1,
-            __pausemess   => q{},
-            __output_type => q{},
-            __objectnumber=> ++$object_number,
-            __plotnumber  => 1,
-            __error_log   => q{},
+            __pausetime     => -1,
+            __pausemess     => q{},
+            __objectnumber  => ++$object_number,
+            __plotnumber    => 1,
+            __error_log     => q{},
+            __iohandle_pipe => undef,
+            __iohandle_file => undef,
         };
 
         bless $self, $class ;
@@ -135,18 +136,21 @@ if ( ! $ENV{'DISPLAY'} ) {
 
         $self->{__error_log}    = ".gnuplot.${$}.${object_number}.stderr.log";
 
-        if ( $self->{scriptfile} eq q{} ) {
-            $self->{__output_type}  = 'pipe';
-            open $IOHANDLE, '|- ', "gnuplot ${persist} 2> $self->{__error_log}"
+        #-------------------------------------------------------------------------------
+        #  open pipe
+        #-------------------------------------------------------------------------------
+        if ( $self->{scriptfile} eq q{} || ( $self->{scriptfile} ne q{} && $self->{plot_also} != 0 ) ) {
+            open $self->{__iohandle_pipe}, '|- ', "gnuplot ${persist} 2> $self->{__error_log}"
                 or die "\n$0 : failed to open pipe to \"gnuplot\" : $!\n";
-            $IOHANDLE->autoflush(1);
+            $self->{__iohandle_pipe}->autoflush(1);
         }
-        else {
-            $self->{__output_type}  = 'file';
-            open $IOHANDLE, '>', $self->{scriptfile}
+        #-------------------------------------------------------------------------------
+        #  open script file
+        #-------------------------------------------------------------------------------
+        if ( $self->{scriptfile} ne q{} ) {
+            open $self->{__iohandle_file}, '>', $self->{scriptfile}
                 or die "\n$0 : failed to open file \"$self->{scriptfile}\" : $!\n";
         }
-        $self->{__iohandle} = $IOHANDLE;
 
         $self->$private_plot_script_header();
         $self->gnuplot_set_style (   $self->{style }  );
@@ -180,15 +184,13 @@ sub DESTROY {
     #---------------------------------------------------------------------------
     #  close pipe to gnuplot / close the script file
     #---------------------------------------------------------------------------
-    if ( !close $self->{__iohandle} ) {
-        if ( $self->{__output_type} eq 'pipe' ) {
+    if ( defined $self->{__iohandle_pipe} && !close $self->{__iohandle_pipe} ) {
             print { *STDERR } "Graphics::GnuplotIF (object $self->{__objectnumber}): "
             ."problem closing communication to gnuplot\n";
-        }
-        if ( $self->{__output_type} eq 'file' ) {
+    }
+    if ( defined $self->{__iohandle_file} && !close $self->{__iohandle_file} ) {
             print { *STDERR } "Graphics::GnuplotIF (object $self->{__objectnumber}): "
             ."problem closing file $self->{scriptfile}\n";
-        }
     }
     #---------------------------------------------------------------------------
     #  remove empty error logfiles, if any
@@ -317,38 +319,40 @@ sub gnuplot_plot_xy {
 #                assumed to contain y-values
 #===============================================================================
 sub gnuplot_plot_many {
-    my  ( $self, @array_refs )   = @_;
-    my  $parnr  = 0;
-    my  $cmd  = " '-' using 1:2 with $self->{style} title <PLOT_TITLE>,\\\n" x ((scalar @array_refs)/2);
+    my ( $self, @array_refs ) = @_;
+
+    my $parnr = 0;
+    my $cmd   = " '-' using 1:2 with $self->{style} title <PLOT_TITLE>,\\\n" x
+        ( ( scalar @array_refs ) / 2 );
     $cmd =~ s/,\\\n$//s;
-    $self->$private_apply_plot_titles(\$cmd); # Honor gnuplot_set_plot_titles
+    $self->$private_apply_plot_titles( \$cmd );    # Honor gnuplot_set_plot_titles
     return $self if $cmd eq q{};
 
-    $self->gnuplot_cmd( "plot \\\n$cmd\n" );
+    $self->gnuplot_cmd("plot \\\n$cmd\n");
 
     while (@array_refs) {
         my $xxr = shift @array_refs;
         $parnr++;
         die "Graphics::GnuplotIF (object $self->{__objectnumber}): gnuplot_plot_many - "
-        ."$parnr. argument not an array reference\n"
-        if ref($xxr) ne 'ARRAY';
-        my $yyr = shift @array_refs ;
+            . "$parnr. argument not an array reference\n"
+            if ref($xxr) ne 'ARRAY';
+        my $yyr = shift @array_refs;
         $parnr++;
         die "Graphics::GnuplotIF (object $self->{__objectnumber}): gnuplot_plot_many - "
-        ."$parnr. argument not an array reference\n"
-        if ref($yyr) ne 'ARRAY';
+            . "$parnr. argument not an array reference\n"
+            if ref($yyr) ne 'ARRAY';
 
         # there may be fewer y-values than x-values
 
-        my  $min    = $#{$xxr} < $#{$yyr}  ?  $#{$xxr}  :  $#{$yyr};
-        foreach my $i ( 0..$min ) {
-            $self->gnuplot_cmd( "$$xxr[$i] $$yyr[$i]" );
+        my $min = $#{$xxr} < $#{$yyr} ? $#{$xxr} : $#{$yyr};
+        foreach my $i ( 0 .. $min ) {
+            $self->gnuplot_cmd("$$xxr[$i] $$yyr[$i]");
         }
-        $self->gnuplot_cmd( 'e' );
+        $self->gnuplot_cmd('e');
     }
     $self->{__plotnumber}++;
     return $self;
-} # ----------  end of subroutine gnuplot_plot_many  ----------
+}    # ----------  end of subroutine gnuplot_plot_many  ----------
 
 #===  CLASS METHOD  ============================================================
 #         NAME:  gnuplot_plot_xy_style
@@ -526,7 +530,9 @@ sub gnuplot_plot_3d {
 #===============================================================================
 sub gnuplot_pause {
     my  ( $self, $pause, $message ) = @_;
-    if ( defined $pause && $pause =~ m/[+-]?(\d+|\d+\.\d*|\d*\.\d+)/x ) {
+
+    $self->{__pausetime}    = 0;                # default: wait for a carriage return
+    if ( defined $pause && $pause =~ m/^[+-]?(\d+|\d+\.\d*|\d*\.\d+)$/x ) {
         $self->{__pausetime}    = $pause;
     }
     if ( defined $message && $message ne q{} ) {
@@ -546,7 +552,7 @@ sub gnuplot_pause {
         if ( $self->{silent_pause} == 1 ) {
             print "$msg0$msg2";
         }
-        $self->gnuplot_cmd( "pause $self->{__pausetime} \n" );
+        $self->gnuplot_cmd( "pause $self->{__pausetime}" );
     }
     return $self;
 }   # ----------  end of subroutine gnuplot_pause  ----------
@@ -560,8 +566,14 @@ sub gnuplot_pause {
 sub gnuplot_cmd {
     my  ($self, @commands)  = @_;
     @commands = map {$_."\n"} @commands;
-    print { $self->{__iohandle}} @commands
-        or croak "Couldn't write to pipe: $!";
+    if ( defined $self->{__iohandle_pipe} ) {
+        print { $self->{__iohandle_pipe} } @commands
+            or croak "Couldn't write to pipe: $!";
+    }
+    if ( defined $self->{__iohandle_file} ) {
+        print { $self->{__iohandle_file} } @commands
+            or croak "Couldn't write to file $!";
+    }
     return $self;
 } # ----------  end of subroutine gnuplot_cmd  ----------
 
@@ -633,7 +645,7 @@ sub gnuplot_reset {
 sub gnuplot_set_title {
     my  ( $self, $title ) = @_;
     if ( defined $title ) {
-        $self->gnuplot_cmd( "set title  \"$title\"" );
+        $self->gnuplot_cmd( "set title  '$title'" );
     };
     return $self;
 } # ----------  end of subroutine gnuplot_set_title  ----------
@@ -738,7 +750,7 @@ Graphics::GnuplotIF - A dynamic Perl interface to gnuplot
 
 =head1 VERSION
 
-This documentation refers to Graphics::GnuplotIF version 1.4
+This documentation refers to Graphics::GnuplotIF version 1.5
 
 =head1 SYNOPSIS
 
@@ -750,45 +762,46 @@ This documentation refers to Graphics::GnuplotIF version 1.4
 
   my  $plot1 = Graphics::GnuplotIF->new(title => "line", style => "points");
 
-  $plot1->gnuplot_plot_y( \@x );                       # plot 9 points over 0..8
+  $plot1->gnuplot_plot_y( \@x );                # plot 9 points over 0..8
 
-  $plot1->gnuplot_pause( );                            # hit RETURN to continue
+  $plot1->gnuplot_pause( );                     # hit RETURN to continue
 
-  $plot1->gnuplot_set_title( "parabola" );             # new title
-  $plot1->gnuplot_set_style( "lines" );                # new line style
-  $plot1->gnuplot_plot_xy( \@x, \@y1, \@y2 );          # rewrite plot1: y1, y2 over x
-  $plot1->gnuplot_plot_many( \@x1, \@y1, \@x2, \@y2 ); # rewrite plot1: y1 over x1, y2 over x2
+  $plot1->gnuplot_set_title( "parabola" );      # new title
+  $plot1->gnuplot_set_style( "lines" );         # new line style
 
-  my  $plot2  = Graphics::GnuplotIF->new;              # new plot object
+  $plot1->gnuplot_plot_xy( \@x, \@y1, \@y2 );   # plot 1: y1, y2 over x
+  $plot1->gnuplot_plot_many( \@x, \@y1, \@x, \@y2 ); # plot 1: y1 - x, y2 - x
 
-  $plot2->gnuplot_set_xrange(  0, 4 );                 # set x range
-  $plot2->gnuplot_set_yrange( -2, 2 );                 # set y range
-  $plot2->gnuplot_cmd( "set grid" );                   # send a gnuplot command
-  $plot2->gnuplot_plot_equation(                       # 3 equations in one plot
+  my  $plot2  = Graphics::GnuplotIF->new;       # new plot object
+
+  $plot2->gnuplot_set_xrange(  0, 4 );          # set x range
+  $plot2->gnuplot_set_yrange( -2, 2 );          # set y range
+  $plot2->gnuplot_cmd( "set grid" );            # send a gnuplot command
+  $plot2->gnuplot_plot_equation(                # 3 equations in one plot
     "y1(x) = sin(x)",
     "y2(x) = cos(x)",
     "y3(x) = sin(x)/x" );
 
-  $plot2->gnuplot_pause( );                            # hit RETURN to continue
+  $plot2->gnuplot_pause( );                     # hit RETURN to continue
 
-  $plot2->gnuplot_plot_equation(                       # rewrite plot 2
+  $plot2->gnuplot_plot_equation(                # rewrite plot 2
     "y4(x) = 2*exp(-x)*sin(4*x)" );
 
-  $plot2->gnuplot_pause( );                            # hit RETURN to continue
+  $plot2->gnuplot_pause( );                     # hit RETURN to continue
 
-  my  $plot3  = GnuplotIF;                             # new plot object
+  my  $plot3  = GnuplotIF;                      # new plot object
 
-  my    @xyz    = (                                    # 2-D-matrix, z-values
+  my    @xyz    = (                             # 2-D-matrix, z-values
     [0,  1,  4,  9],
     [1,  2,  6, 15],
     [4,  6, 12, 27],
     [9, 15, 27, 54],
   );
 
-  $plot3->gnuplot_cmd( "set grid" );                   # send a gnuplot command
-  $plot3->gnuplot_set_plot_titles("surface");          # set legend
-  $plot3->gnuplot_plot_3d( \@xyz );                    # start 3-D-plot
-  $plot3->gnuplot_pause( );                            # hit RETURN to continue
+  $plot3->gnuplot_cmd( "set grid" );            # send a gnuplot command
+  $plot3->gnuplot_set_plot_titles("surface");   # set legend
+  $plot3->gnuplot_plot_3d( \@xyz );             # start 3-D-plot
+  $plot3->gnuplot_pause( );                     # hit RETURN to continue
 
 =head1 DESCRIPTION
 
@@ -851,6 +864,8 @@ their default values):
   xrange       => [],      # array reference; autoscaling, if empty
   plot_titles  => [],      # array of strings; titles used in the legend
   scriptfile   => '',      # write all plot commands to the specified file
+  plot_also    => 0,       # write all plot commands to the specified file,
+                           # in addition show the plots
   persist      => 0,       # let plot windows survive after gnuplot exits
                            # 0 : close / 1 : survive
   objectname   => '',      # an optional name for the object
@@ -902,7 +917,7 @@ assumed to contain the x-values for the following function values.
 =head2 gnuplot_plot_xy_style
 
   %y1 = ( 'y_values' => \@y1, 'style_spec' => "lines lw 3" );
-  %y2 = ( 'y_values' => \@y2, 
+  %y2 = ( 'y_values' => \@y2,
           'style_spec' => "points pointtype 4 pointsize 5" );
 
   $plot1->gnuplot_plot_xy_style( \@x, \%y1, \%y2 );
@@ -923,7 +938,8 @@ function and is a reference to the arrays of x- and y-values for that function.
 
 =head2 gnuplot_plot_many_style
 
-  %f1 = ( 'x_values' => \@x1, 'y_values' => \@y1, 'style_spec' => "lines lw 3" );
+  %f1 = ( 'x_values' => \@x1, 'y_values' => \@y1,
+          'style_spec' => "lines lw 3" );
   %f2 = ( 'x_values' => \@x2, 'y_values' => \@y2,
           'style_spec' => "points pointtype 4 pointsize 5" );
 
@@ -958,7 +974,7 @@ C<gnuplot_plot_3d> takes one reference to an 2-D-array of z-values.
 
 This is an emulation of the B<gnuplot> C<pause> command.  It displays any text
 associated with the command and waits a specified amount of time or until the
-carriage return is pressed. The message can be suppressed by  
+carriage return is pressed. The message can be suppressed by
 
   silent_pause => 0
 
@@ -971,18 +987,16 @@ all, and a positive number will wait the specified number of seconds.
 The time value and the text are stored in the object and reused.  A sequence
 like
 
-  $plot1->gnuplot_pause( 5.5 );          # delay is 5.5 seconds
   $plot1->gnuplot_plot_y( \@y1 );
+  $plot1->gnuplot_pause( 5.5 );          # delay is 5.5 seconds
 
-  $plot1->gnuplot_pause( );
   $plot1->gnuplot_plot_y( \@y2 );
-
   $plot1->gnuplot_pause( );
+
   $plot1->gnuplot_plot_y( \@y3 );
+  $plot1->gnuplot_pause( );
 
-  $plot1->gnuplot_pause( -1 );
-
-will display 3 plots with 5 seconds delay and wait for a final carriage return.
+will display 3 plots with 5.5 seconds delay.
 
 
 =head2 gnuplot_cmd
@@ -1056,8 +1070,8 @@ C<title> clause to each data set specified in a B<gnuplot> C<plot> command.
 C<gnuplot_cmd> can be used to write a plot into a file or make a printable file
 by setting/resetting the terminal and the output file:
 
-  $plot1->gnuplot_hardcopy( 'function1.gnuplot.ps', 
-                            'postscript', 
+  $plot1->gnuplot_hardcopy( 'function1.gnuplot.ps',
+                            'postscript',
                             'color lw 3' );
 
   $plot1->gnuplot_plot_xy( \@x, \@y1, \@y2 );
@@ -1124,7 +1138,7 @@ B<GnuplotIF>     constructor, short form (see L<C<GnuplotIF> | GnuplotIF>).
 
 =head1 DIAGNOSTICS
 
-Dialog messages and diagnostic messages start with  
+Dialog messages and diagnostic messages start with
 C< Graphics::GnuplotIF (object NR): ... > .
 
 C<NR> is the number of the corresponding Graphics::GnuplotIF object and output
