@@ -12,7 +12,7 @@
 #      COMPANY:  FH Südwestfalen, Iserlohn
 #      VERSION:  see $VERSION below
 #      CREATED:  16.07.2005 13:43:11 CEST
-#     REVISION:  $Id: GnuplotIF.pm,v 1.16 2011/03/03 20:15:14 mehner Exp $
+#     REVISION:  $Id: GnuplotIF.pm,v 1.18 2011/06/03 17:34:08 mehner Exp $
 #===============================================================================
 
 package Graphics::GnuplotIF;
@@ -22,7 +22,7 @@ use warnings;
 use Carp;
 use IO::Handle;
 
-our $VERSION     = '1.6';                       # version number
+our $VERSION     = '1.7';                       # version number
 
 use base qw(Exporter);
 use vars qw(@ISA @EXPORT_OK %EXPORT_TAGS);
@@ -75,10 +75,12 @@ END
 };
 
 #---------------------------------------------------------------------------
-#  warn if there is no graphic display
+#  warn if unix and there is no graphic display
 #---------------------------------------------------------------------------
-if ( ! $ENV{'DISPLAY'} ) {
+if (($^O ne 'MSWin32') and ($^O ne 'cygwin')) {
+  if ( ! $ENV{'DISPLAY'} ) {
     warn "Graphics::GnuplotIF : cannot find environment variable DISPLAY \n"
+  }
 }
 
 #===  FUNCTION  ================================================================
@@ -104,6 +106,7 @@ if ( ! $ENV{'DISPLAY'} ) {
         my  ( $class, %args ) = @_;
 
         my  $self   = {
+	    program         => 'gnuplot', # something like 'C:\gnuplot\binaries\gnuplot.exe' on Windows
             style           => 'lines',
             title           => q{},
             xlabel          => q{},
@@ -140,7 +143,7 @@ if ( ! $ENV{'DISPLAY'} ) {
         #  open pipe
         #-------------------------------------------------------------------------------
         if ( $self->{scriptfile} eq q{} || ( $self->{scriptfile} ne q{} && $self->{plot_also} != 0 ) ) {
-            open $self->{__iohandle_pipe}, '|- ', "gnuplot ${persist} 2> $self->{__error_log}"
+            open $self->{__iohandle_pipe}, '|- ', $self->{program}." ${persist} 2> $self->{__error_log}"
                 or die "\n$0 : failed to open pipe to \"gnuplot\" : $!\n";
             $self->{__iohandle_pipe}->autoflush(1);
         }
@@ -750,7 +753,7 @@ Graphics::GnuplotIF - A dynamic Perl interface to gnuplot
 
 =head1 VERSION
 
-This documentation refers to Graphics::GnuplotIF version 1.5
+This documentation refers to Graphics::GnuplotIF version 1.6
 
 =head1 SYNOPSIS
 
@@ -808,7 +811,7 @@ This documentation refers to Graphics::GnuplotIF version 1.5
 Graphics::GnuplotIF is a simple and easy to use dynamic Perl interface to
 B<gnuplot>.  B<gnuplot> is a freely available, command-driven graphical display
 tool for Unix.  It compiles and works quite well on a number of Unix flavours
-as well as other operating systems.
+as well as other operating systems, including Windows with C<gnuplot.exe>.
 
 This module enables sending display requests asynchronously to B<gnuplot>
 through simple Perl subroutine calls.
@@ -855,21 +858,21 @@ handle:
 A few named arguments can be passed as key - value  pairs (here shown with
 their default values):
 
-
-  style        => 'lines', # one of the gnuplot line styles (see below)
-  title        => '',      # string
-  xlabel       => 'x',     # string
-  ylabel       => 'y',     # string
-  xrange       => [],      # array reference; autoscaling, if empty
-  xrange       => [],      # array reference; autoscaling, if empty
-  plot_titles  => [],      # array of strings; titles used in the legend
-  scriptfile   => '',      # write all plot commands to the specified file
-  plot_also    => 0,       # write all plot commands to the specified file,
-                           # in addition show the plots
-  persist      => 0,       # let plot windows survive after gnuplot exits
-                           # 0 : close / 1 : survive
-  objectname   => '',      # an optional name for the object
-  silent_pause => 1,       # 0 suppress message from gnuplot_pause()
+  program      => 'gnuplot' # fully qualified name of the Gnuplot executable
+  style        => 'lines',  # one of the gnuplot line styles (see below)
+  title        => '',       # string
+  xlabel       => 'x',      # string
+  ylabel       => 'y',      # string
+  xrange       => [],       # array reference; autoscaling, if empty
+  xrange       => [],       # array reference; autoscaling, if empty
+  plot_titles  => [],       # array of strings; titles used in the legend
+  scriptfile   => '',       # write all plot commands to the specified file
+  plot_also    => 0,        # write all plot commands to the specified file,
+                            # in addition show the plots
+  persist      => 0,        # let plot windows survive after gnuplot exits
+                            # 0 : close / 1 : survive
+  objectname   => '',       # an optional name for the object
+  silent_pause => 1,        # 0 suppress message from gnuplot_pause()
 
 These attributes are stored in each object.
 
@@ -889,6 +892,10 @@ The objects are automatically deleted by a destructor.  The destructor closes
 the pipe to the B<gnuplot> process belonging to that object.  The B<gnuplot>
 process will also terminate and remove the graphic output.  The termination can
 be controlled by the method L<C<gnuplot_pause> | gnuplot_pause> .
+
+The program argument is provided to allow Graphics::GnuplotIF to be
+used with Gnuplot on Windows using C<gnuplot.exe>, a compilation
+which includes code that emulates a unix pipe.
 
 =head2 GnuplotIF
 
@@ -1160,6 +1167,16 @@ The environment variable DISPLAY is checked for the display.
 
 C<gnuplot> ( http://sourceforge.net/projects/gnuplot ) must be installed.
 
+Using Graphics::GnuplotIF on Windows requires having the
+C<gnuplot.exe> version installed.  This is the version that emulates a
+pipe.  The Graphics::GnuplotIF object must then be instantiated with
+the C<program> argument, like so:
+
+  my $plot = Graphics::GnuplotIF -> new(program => 'C:\gnuplot\binaries\gnuplot.exe');
+
+A recent compilation of Gnuplot for Windows can be found at
+SourceForge: L<http://sourceforge.net/projects/gnuplot/files/gnuplot/>.
+
 =item *
 
 The module C<Carp> is used for error handling.
@@ -1196,12 +1213,13 @@ Stephen Marshall (smarshall at wsi dot com) contributed C<gnuplot_set_plot_title
 
 Georg Bauhaus (bauhaus at futureapps dot de) contributed C<gnuplot_plot_xy_style>.
 
-Bruce Ravel (bravel at bnl dot gov) contributed C<gnuplot_plot_many> and
-C<gnuplot_plot_many_style>  and made method calls chainable.
+Bruce Ravel (bravel at bnl dot gov) contributed C<gnuplot_plot_many>
+and C<gnuplot_plot_many_style>, made method calls chainable, and added
+Windows support.
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright (C) 2005-2008 by Fritz Mehner
+Copyright (C) 2005-2011 by Fritz Mehner
 
 This module is free software; you can redistribute it and/or modify it under
 the same terms as Perl itself. See perldoc perlartistic.  This program is

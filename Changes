@@ -35,3 +35,6 @@ Revision history for Perl extension GnuplotIF.
   - gnuplot_pause() not working as advertised.
 	- New constructor argument 'plot_also': write all plot commands to a file, in
 		addition show the plots.
+
+1.7  June 3 2011
+  - Windows support  (thanks to Bruce Ravel).
